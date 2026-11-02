@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+# cosmic-autorotate - automatic screen rotation for the COSMIC desktop
+#
+# Reads the accelerometer via iio-sensor-proxy (monitor-sensor) and rotates
+# the internal display with cosmic-randr.
+#
+# Optional settings: ~/.config/cosmic-autorotate.conf (see README)
+
+set -u
+
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/cosmic-autorotate.conf"
+
+# ---- defaults (override in the config file) --------------------------------
+OUTPUT=""      # empty = auto-detect internal panel (eDP-*, LVDS-*, DSI-*)
+WIDTH=""       # empty = use the current mode reported by cosmic-randr
+HEIGHT=""
+REFRESH=""
+ONLY_180=0     # 1 = only switch between normal and 180° (tent mode)
+SWAP_90=0      # 1 = swap 90/270 if portrait comes out upside down
+# -----------------------------------------------------------------------------
+
+# shellcheck source=/dev/null
+[ -f "$CONFIG" ] && . "$CONFIG"
+
+log() { echo "cosmic-autorotate: $*" >&2; }
+
+for cmd in monitor-sensor cosmic-randr; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        log "'$cmd' not found. Install iio-sensor-proxy / run this on COSMIC."
+        exit 1
+    fi
+done
+
+: "${XDG_RUNTIME_DIR:=/run/user/$(id -u)}"
+
+# Find the compositor's Wayland socket (needed when started by systemd).
+find_wayland() {
+    if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+        return 0
+    fi
+    local s
+    for s in "$XDG_RUNTIME_DIR"/wayland-*; do
+        [ -S "$s" ] || continue
+        WAYLAND_DISPLAY="$(basename "$s")"
+        export WAYLAND_DISPLAY
+        return 0
+    done
+    return 1
+}
+
+until find_wayland; do sleep 1; done
+log "using Wayland display $WAYLAND_DISPLAY"
+
+randr_list() {
+    # strip ANSI colour codes, if any
+    cosmic-randr list 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+}
+
+detect_output() {
+    randr_list | grep -oE '^[[:space:]]*(eDP|LVDS|DSI)-[0-9]+' | tr -d '[:space:]' | head -n1
+}
+
+# Prints "WIDTH HEIGHT REFRESH" of the current mode of output $1
+current_mode() {
+    randr_list | awk -v out="$1" '
+        { line = $0; sub(/^[[:space:]]+/, "", line) }
+        index(line, out) == 1 && substr(line, length(out) + 1, 1) !~ /[0-9]/ { inside = 1; next }
+        inside && /^[^[:space:]]/ { inside = 0 }
+        inside && /current/ {
+            w = ""; h = ""; r = ""
+            if (match($0, /[0-9]+x[0-9]+/)) {
+                split(substr($0, RSTART, RLENGTH), a, "x"); w = a[1]; h = a[2]
+            }
+            if (match($0, /@[[:space:]]*[0-9.]+/)) {
+                r = substr($0, RSTART, RLENGTH); gsub(/[@[:space:]]/, "", r)
+            }
+            print w, h, r
+            exit
+        }'
+}
+
+LAST=""
+
+apply() {
+    local transform="$1" out w h r
+    [ "$transform" = "$LAST" ] && return
+
+    out="${OUTPUT:-$(detect_output)}"
+    if [ -z "$out" ]; then
+        log "could not detect the internal display; set OUTPUT in $CONFIG"
+        return
+    fi
+
+    read -r w h r <<<"$(current_mode "$out")"
+    w="${WIDTH:-$w}"; h="${HEIGHT:-$h}"; r="${REFRESH:-$r}"
+    if [ -z "$w" ] || [ -z "$h" ]; then
+        log "could not read the mode of $out; set WIDTH/HEIGHT in $CONFIG"
+        return
+    fi
+
+    if [ -n "$r" ] && cosmic-randr mode "$out" "$w" "$h" --refresh "$r" --transform "$transform" >/dev/null 2>&1; then
+        :
+    elif cosmic-randr mode "$out" "$w" "$h" --transform "$transform"; then
+        :
+    else
+        log "cosmic-randr failed ($out ${w}x${h} $transform)"
+        return
+    fi
+    LAST="$transform"
+    log "$out -> $transform"
+}
+
+R90=rotate90; R270=rotate270
+if [ "$SWAP_90" = 1 ]; then R90=rotate270; R270=rotate90; fi
+
+monitor-sensor --accel | while IFS= read -r line; do
+    case "$line" in
+        *"orientation changed: normal"*|*"orientation: normal"*)
+            apply normal ;;
+        *"orientation changed: bottom-up"*|*"orientation: bottom-up"*)
+            apply rotate180 ;;
+        *"orientation changed: left-up"*|*"orientation: left-up"*)
+            [ "$ONLY_180" = 1 ] || apply "$R90" ;;
+        *"orientation changed: right-up"*|*"orientation: right-up"*)
+            [ "$ONLY_180" = 1 ] || apply "$R270" ;;
+    esac
+done
