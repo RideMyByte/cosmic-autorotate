@@ -51,8 +51,17 @@ That's it. The service starts now and on every login.
 |------------|---------|---------|
 | `ONLY_180` | `0`     | `1` = only normal ↔ 180° (tent mode), ignore portrait |
 | `SWAP_90`  | `0`     | `1` = swap the portrait orientations if they are upside down |
+| `NATIVE_ROTATION` | `normal` | Compensate for native screen tilt: `normal`, `rotate90`, `rotate180`, `rotate270` |
 | `OUTPUT`   | auto    | Display name, e.g. `eDP-1` (see `cosmic-randr list`) |
 | `WIDTH` / `HEIGHT` / `REFRESH` | auto | Fixed mode, only if auto-detection fails |
+
+### Native Rotation Compensation
+
+Some devices (e.g., Chuwi MinibookX) have the screen natively tilted or rotated. Use `NATIVE_ROTATION` to compensate:
+
+- **Determine the native tilt**: Hold the device in normal position and check how the OS sees the screen orientation without this script.
+- **Set the inverse**: If the screen is naturally rotated 90° clockwise, set `NATIVE_ROTATION="rotate270"` (the inverse rotation).
+- Example: Chuwi MinibookX screen is tilted left → `NATIVE_ROTATION="rotate90"` and `SWAP_90=1`
 
 Apply changes with `systemctl --user restart cosmic-autorotate`.
 

@@ -11,12 +11,13 @@ set -u
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/cosmic-autorotate.conf"
 
 # ---- defaults (override in the config file) --------------------------------
-OUTPUT=""      # empty = auto-detect internal panel (eDP-*, LVDS-*, DSI-*)
-WIDTH=""       # empty = use the current mode reported by cosmic-randr
+OUTPUT=""                 # empty = auto-detect internal panel (eDP-*, LVDS-*, DSI-*)
+WIDTH=""                  # empty = use the current mode reported by cosmic-randr
 HEIGHT=""
 REFRESH=""
-ONLY_180=0     # 1 = only switch between normal and 180° (tent mode)
-SWAP_90=0      # 1 = swap 90/270 if portrait comes out upside down
+ONLY_180=0                # 1 = only switch between normal and 180° (tent mode)
+SWAP_90=0                 # 1 = swap 90/270 if portrait comes out upside down
+NATIVE_ROTATION="normal"  # compensate for screen native tilt: normal, rotate90, rotate180, rotate270
 # -----------------------------------------------------------------------------
 
 # shellcheck source=/dev/null
@@ -110,18 +111,58 @@ apply() {
     log "$out -> $transform"
 }
 
+# Apply native rotation offset to sensor readings
+apply_native_offset() {
+    local detected="$1" offset="$2"
+    case "$offset" in
+        rotate90)
+            case "$detected" in
+                normal) echo rotate270 ;;
+                rotate90) echo rotate180 ;;
+                rotate180) echo rotate90 ;;
+                rotate270) echo normal ;;
+                *) echo "$detected" ;;
+            esac ;;
+        rotate180)
+            case "$detected" in
+                normal) echo rotate180 ;;
+                rotate90) echo rotate270 ;;
+                rotate180) echo normal ;;
+                rotate270) echo rotate90 ;;
+                *) echo "$detected" ;;
+            esac ;;
+        rotate270)
+            case "$detected" in
+                normal) echo rotate90 ;;
+                rotate90) echo normal ;;
+                rotate180) echo rotate270 ;;
+                rotate270) echo rotate180 ;;
+                *) echo "$detected" ;;
+            esac ;;
+        *) echo "$detected" ;;
+    esac
+}
+
 R90=rotate90; R270=rotate270
 if [ "$SWAP_90" = 1 ]; then R90=rotate270; R270=rotate90; fi
 
 monitor-sensor --accel | while IFS= read -r line; do
     case "$line" in
         *"orientation changed: normal"*|*"orientation: normal"*)
-            apply normal ;;
+            rotation=$(apply_native_offset normal "$NATIVE_ROTATION")
+            apply "$rotation" ;;
         *"orientation changed: bottom-up"*|*"orientation: bottom-up"*)
-            apply rotate180 ;;
+            rotation=$(apply_native_offset rotate180 "$NATIVE_ROTATION")
+            apply "$rotation" ;;
         *"orientation changed: left-up"*|*"orientation: left-up"*)
-            [ "$ONLY_180" = 1 ] || apply "$R90" ;;
+            if [ "$ONLY_180" != 1 ]; then
+                rotation=$(apply_native_offset "$R90" "$NATIVE_ROTATION")
+                apply "$rotation"
+            fi ;;
         *"orientation changed: right-up"*|*"orientation: right-up"*)
-            [ "$ONLY_180" = 1 ] || apply "$R270" ;;
+            if [ "$ONLY_180" != 1 ]; then
+                rotation=$(apply_native_offset "$R270" "$NATIVE_ROTATION")
+                apply "$rotation"
+            fi ;;
     esac
 done
