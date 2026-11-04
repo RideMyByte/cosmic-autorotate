@@ -15,3 +15,8 @@ ONLY_180=0
 
 # 1 = swap the two portrait orientations if they come out upside down.
 SWAP_90=0
+
+# Compensate for native screen rotation (e.g., screen natively tilted on device).
+# Values: normal, rotate90, rotate180, rotate270
+# Example: Chuwi MinibookX has screen tilted left, use rotate90 to compensate WITH SWAP_90=1
+NATIVE_ROTATION="normal"
